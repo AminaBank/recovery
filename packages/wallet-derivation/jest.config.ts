@@ -2,7 +2,9 @@ import type { Config } from '@jest/types';
 
 const config: Config.InitialOptions = {
   verbose: true,
-  transform: { '\\.ts$': ['ts-jest', { useESM: true }] },
+  transform: {
+    '\\.ts$': ['ts-jest', { useESM: true, tsconfig: { jsx: 'react-jsx' } }],
+  },
   extensionsToTreatAsEsm: ['.ts'],
 };
 

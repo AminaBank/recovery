@@ -1,4 +1,4 @@
-import { getLogger } from '@fireblocks/recovery-shared';
+import { getLogger } from '@fireblocks/recovery-shared/lib/getLogger';
 import { LOGGER_NAME_RELAY, LOGGER_NAME_SHARED, LOGGER_NAME_UTILITY } from '@fireblocks/recovery-shared/constants';
 import { RecoveredKey } from '@fireblocks/extended-key-recovery/src/types';
 import { Algorithm, HDPath, HDPathParts, Input, KeyDerivation, Derivation } from '../types';

@@ -18,6 +18,10 @@ export const deriveWallet = (input: Input): BaseWallet => {
 
 export * from './types';
 
+export * from './verifySignature';
+
+export * from './signing';
+
 export * from './wallets/chains';
 
 export { BaseWallet, NCWallet };

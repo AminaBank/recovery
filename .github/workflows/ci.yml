@@ -1,8 +1,15 @@
 name: CI
 
 on:
+  push:
+    branches: [internal]
   pull_request:
     types: [closed]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # test:
@@ -17,7 +24,7 @@ jobs:
   #     - name: Setup Node.js environment
   #       uses: actions/setup-node@v3
   #       with:
-  #         node-version: lts/gallium
+  #         node-version: 20
   #         cache: yarn
 
   #     - name: Install Node.js dependencies
@@ -36,14 +43,14 @@ jobs:
     if: contains(github.event.pull_request.labels.*.name, 'new-version')
     steps:
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
       - name: Setup Node.js environment
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: lts/gallium
+          node-version: 20
           cache: 'yarn'
 
       - name: Install Dependencies
@@ -58,8 +65,12 @@ jobs:
   build:
     name: Build for ${{ matrix.os }}
     runs-on: ${{ matrix.runs-on }}
-    if: contains(github.event.pull_request.labels.*.name, 'new-version')
     needs: [pr]
+    # Build on every push and every manual run
+    if: |
+      always() &&
+      (github.event_name != 'pull_request' ||
+       contains(github.event.pull_request.labels.*.name, 'new-version'))
     timeout-minutes: 35
 
     strategy:
@@ -77,16 +88,16 @@ jobs:
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
       - name: Setup Node.js environment
         # setup-node stalls on self-hosted runner
         if: ${{ !contains(matrix.runs-on, 'ARM64') }}
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: lts/gallium
+          node-version: 20
           cache: yarn
 
       - name: Install Node.js dependencies
@@ -97,20 +108,22 @@ jobs:
           export NODE_OPTIONS="--max_old_space_size=4096"
           yarn forcebuild
 
-      - name: Upload Recovery Utility ${{ matrix.os }} artifact
+      - name: Upload Recovery Utility artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Recovery Utility ${{ matrix.os }}
+          name: recovery-utility-${{ matrix.os }}
+          if-no-files-found: error
           path: |
             apps/recovery-utility/dist/*.AppImage
             apps/recovery-utility/dist/*.exe
             apps/recovery-utility/dist/*.zip
 
-      - name: Upload Recovery Relay artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Recovery Relay - ${{ matrix.os }}
-          path: apps/recovery-relay/out/
+      # - name: Upload Recovery Relay artifact
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: recovery-relay-${{ matrix.os }}
+      #     if-no-files-found: error
+      #     path: apps/recovery-relay/out/
 
       # - name: Clean up Apple Developer secrets
       #   if: ${{ startsWith(matrix.os, 'macos') && always() }}
@@ -120,3 +133,107 @@ jobs:
       #   run: |
       #     security delete-keychain "$KEYCHAIN_PATH"
       #     rm -rf "$APPLE_KEY_DIR_PATH"
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build]
+
+    # `!cancelled()` is required: the `pr` job is skipped on push events, and a
+    # skipped ancestor propagates down the `needs` chain unless a job opts out
+    # with a status-check function. `build` already opts out via `always()`;
+    # without the same treatment here the release job is silently skipped.
+    # The build result is then checked explicitly, since disabling the implicit
+    # skip also disables the implicit `success()` gate on `needs`.
+    if: |
+      !cancelled() &&
+      needs.build.result == 'success' &&
+      (
+        (
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/internal'
+        ) ||
+        github.event_name == 'workflow_dispatch'
+      )
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./apps/recovery-utility/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: $VERSION"
+
+      - name: Check whether the release already exists
+        id: release_exists
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists - skipping."
+            echo "create=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release v$VERSION does not exist yet - it will be created."
+            echo "create=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download Recovery Utility artifacts
+        if: steps.release_exists.outputs.create == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: recovery-utility-*
+          path: release-assets/recovery-utility
+          merge-multiple: true
+
+      # - name: Download Recovery Relay artifacts
+      #   if: steps.release_exists.outputs.create == 'true'
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     pattern: recovery-relay-*
+      #     path: release-assets/recovery-relay
+      #     merge-multiple: true
+
+      # - name: Package Recovery Relay
+      #   if: steps.release_exists.outputs.create == 'true'
+      #   run: |
+      #     VERSION="${{ steps.version.outputs.version }}"
+
+      #     cd release-assets/recovery-relay
+      #     zip -r "../recovery-relay-$VERSION.zip" .
+      #     cd -
+      #     rm -rf release-assets/recovery-relay
+
+      - name: List release assets
+        if: steps.release_exists.outputs.create == 'true'
+        run: find release-assets -type f -print
+
+      - name: Create Release
+        if: steps.release_exists.outputs.create == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          shopt -s nullglob
+          ASSETS=(release-assets/recovery-utility/* release-assets/*.zip)
+          shopt -u nullglob
+
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "::error::No build artifacts found - refusing to create an empty release."
+            exit 1
+          fi
+
+          printf 'Attaching asset: %s\n' "${ASSETS[@]}"
+
+          gh release create "v$VERSION" "${ASSETS[@]}" \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --generate-notes

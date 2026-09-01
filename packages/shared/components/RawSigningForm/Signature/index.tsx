@@ -1,25 +1,60 @@
 import { Grid, Typography } from '@mui/material';
+import { CheckCircle, Cancel } from '@mui/icons-material';
 import { SigningAlgorithms } from '../../../reducers/rawSignReducer';
 import { TextField } from '../../TextField';
 
 interface SignatureProps {
   selectedAlgorithm: SigningAlgorithms;
   signature: string;
+  address?: string | null;
+  isVerified?: boolean | null;
 }
 
 const Signature: React.FC<SignatureProps> = (props) => {
-  const { selectedAlgorithm, signature } = props;
+  const { selectedAlgorithm, signature, address, isVerified } = props;
   return (
     <Grid
       item
       xs={12}
       sx={{
         display: 'flex',
-        alignItems: 'center',
+        flexDirection: 'column',
+        alignItems: 'stretch',
         flexGrow: 1,
         width: '100%',
       }}
     >
+      {isVerified !== null && isVerified !== undefined && (
+        <Grid item xs={12} sx={{ width: '100%', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+          {isVerified ? <CheckCircle color='success' /> : <Cancel color='error' />}
+          <Typography variant='body1' sx={{ fontWeight: 'bold' }} color={isVerified ? 'success.main' : 'error.main'}>
+            {isVerified
+              ? 'Signature verified against the derived public key'
+              : 'Signature could NOT be verified against the derived public key'}
+          </Typography>
+        </Grid>
+      )}
+      {!!address && (
+        <Grid item xs={12} sx={{ width: '100%', marginBottom: 2 }}>
+          <Typography variant='body1' sx={{ fontWeight: 'bold' }}>
+            Address:
+          </Typography>
+          <TextField
+            id='signing-address'
+            enableCopy={true}
+            multiline
+            sx={{
+              wordBreak: 'break-word',
+              overflowWrap: 'break-word',
+              whiteSpace: 'pre-wrap',
+              width: '100%',
+              padding: 1,
+              borderRadius: 1,
+            }}
+            value={address}
+          />
+        </Grid>
+      )}
       {selectedAlgorithm === SigningAlgorithms.ECDSA ? (
         <Grid
           container

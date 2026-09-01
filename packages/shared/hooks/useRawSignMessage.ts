@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react';
 import { Buffer } from 'buffer';
+import { encodeBase58 } from 'ethers';
 import { SignMessageParams } from '../components';
-import { HDPathParts, Input } from '@fireblocks/wallet-derivation';
+import { HDPathParts, Input, verifyRawSignature } from '@fireblocks/wallet-derivation';
 import { getLogger, RelayExtendedKeys, UtilityExtendedKeys } from '@fireblocks/recovery-shared';
 import { LOGGER_NAME_UTILITY } from '@fireblocks/recovery-shared/constants';
 import { RawSignMethod, SigningAlgorithms } from '../reducers/rawSignReducer';
@@ -18,8 +19,9 @@ class DerivationPathECDSAWallet extends ECDSAWallet {
 }
 
 class DerivationPathEDDSAWallet extends EdDSAWallet {
-  protected getAddress(evmAddress?: string): string {
-    return evmAddress || '';
+  protected getAddress(): string {
+    // we return the base58 public key
+    return encodeBase58(this.publicKey);
   }
 
   async signMessage(message: string | Uint8Array, hasher: (...msgs: Uint8Array[]) => Promise<Uint8Array> = sha512) {
@@ -49,6 +51,9 @@ const formatECDSASignature = (signatureHex: string) => {
 
 export const useRawSignMessage = (extendedKeys?: UtilityExtendedKeys | RelayExtendedKeys) => {
   const [signature, setSignature] = useState<string | null>(null);
+  const [address, setAddress] = useState<string | null>(null);
+  const [isVerified, setIsVerified] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [selectedAlgorithm, setSelectedAlgorithm] = useState<SigningAlgorithms>(SigningAlgorithms.ECDSA);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
@@ -70,6 +75,9 @@ export const useRawSignMessage = (extendedKeys?: UtilityExtendedKeys | RelayExte
           throw new Error('transaction was not provided');
         }
         setSignature(null);
+        setAddress(null);
+        setIsVerified(null);
+        setError(null);
         const messageHashBuffer = Buffer.from(unsignedMessage, 'hex');
 
         const message = Uint8Array.from(messageHashBuffer);
@@ -95,22 +103,37 @@ export const useRawSignMessage = (extendedKeys?: UtilityExtendedKeys | RelayExte
           logger.info(`Signing message using ${selectedWallet.constructor.name} at path ${selectedWallet.pathParts.join('/')}`);
 
           const sigHex = await selectedWallet.sign(message);
+          setAddress(selectedWallet.address ?? null);
 
           const walletAlgorithm = selectedWallet.algorithm;
+
+          let rawSignatureHex: string;
 
           switch (walletAlgorithm) {
             case 'EDDSA':
               const signatureString = Buffer.from(sigHex).toString('hex');
               // console.log(signatureString);
+              rawSignatureHex = signatureString;
               setSignature(signatureString || 'error');
               break;
             case 'ECDSA':
               const formattedSig = formatECDSASignature(sigHex);
+              rawSignatureHex = formattedSig.signature;
               setSignature(JSON.stringify(formattedSig));
               break;
             default:
               throw new Error('Unknown wallet algorithm');
           }
+
+          // set verified if actually verified
+          setIsVerified(
+            verifyRawSignature({
+              algorithm: walletAlgorithm,
+              message,
+              signature: rawSignatureHex,
+              publicKey: selectedWallet.publicKey,
+            }),
+          );
         } else if (rawSignMethod === RawSignMethod.DERIVATION_PATH) {
           if (!extendedKeys || Object.values(extendedKeys).length === 0) {
             throw new Error('Extended keys not provided');
@@ -128,6 +151,15 @@ export const useRawSignMessage = (extendedKeys?: UtilityExtendedKeys | RelayExte
               const ecdsaSigHex = await dpECDSAWallet.signMessage(message);
               const formattedSig = formatECDSASignature(ecdsaSigHex);
               setSignature(JSON.stringify(formattedSig));
+              setAddress(dpECDSAWallet.address || null);
+              setIsVerified(
+                verifyRawSignature({
+                  algorithm: 'ECDSA',
+                  message,
+                  signature: formattedSig.signature,
+                  publicKey: dpECDSAWallet.publicKey,
+                }),
+              );
               break;
             case SigningAlgorithms.EDDSA:
               const dpEDDSAWallet = new DerivationPathEDDSAWallet(walletInput, derivationPath.coinType);
@@ -135,6 +167,15 @@ export const useRawSignMessage = (extendedKeys?: UtilityExtendedKeys | RelayExte
               const signatureString = Buffer.from(eddsaSigHex).toString('hex');
               // console.log(signatureString);
               setSignature(signatureString || 'error');
+              setAddress(dpEDDSAWallet.address || null);
+              setIsVerified(
+                verifyRawSignature({
+                  algorithm: 'EDDSA',
+                  message,
+                  signature: signatureString,
+                  publicKey: dpEDDSAWallet.publicKey,
+                }),
+              );
               break;
             default:
               throw new Error('Derivation path algorithm error');
@@ -142,7 +183,9 @@ export const useRawSignMessage = (extendedKeys?: UtilityExtendedKeys | RelayExte
         }
       } catch (error) {
         console.error(`generateSignature error - ${error}`);
-        logger.error(error instanceof Error ? error.message : 'Unknown error');
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        logger.error(message);
+        setError(message);
       } finally {
         setIsLoading(false);
       }
@@ -153,6 +196,9 @@ export const useRawSignMessage = (extendedKeys?: UtilityExtendedKeys | RelayExte
   return {
     generateSignature,
     signature,
+    address,
+    isVerified,
+    error,
     selectedAlgorithm,
     isLoading,
     setSignature,

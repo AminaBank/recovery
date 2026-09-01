@@ -10,7 +10,7 @@
   "scripts": {
     "lint": "eslint --fix .",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "test": "jest"
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest"
   },
   "dependencies": {
     "@fireblocks/asset-config": "^0.8.0",

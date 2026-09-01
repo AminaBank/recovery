@@ -1,4 +1,4 @@
-import { RelayExtendedKeys, UtilityExtendedKeys } from '@fireblocks/recovery-shared';
+import type { RelayExtendedKeys, UtilityExtendedKeys } from '@fireblocks/recovery-shared';
 
 export type Algorithm = 'ECDSA' | 'EDDSA';
 
